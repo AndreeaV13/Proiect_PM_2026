@@ -1,7 +1,8 @@
 # Proiect_PM_2026
 Inima Interactiva
 
-# Inima Interactiva OCW: https://ocw.cs.pub.ro/courses/pm/prj2026/alexandru.jipa2803/andreea.voinea1305
+# Inima Interactiva
+https://ocw.cs.pub.ro/courses/pm/prj2026/alexandru.jipa2803/andreea.voinea1305
 
 ## Descriere
 
