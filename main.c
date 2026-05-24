@@ -1,6 +1,3 @@
-// Interactive Heart - ATmega328P Xplained Mini @ 16 MHz
-// senzor HW-827 pe ADC0 / PC0
-
 #ifndef F_CPU
 #define F_CPU 16000000UL
 #endif
