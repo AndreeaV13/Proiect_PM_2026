@@ -1,3 +1,6 @@
+// Interactive Heart - ATmega328P Xplained Mini @ 16 MHz
+// senzor HW-827 pe ADC0 / PC0
+
 #ifndef F_CPU
 #define F_CPU 16000000UL
 #endif
@@ -11,8 +14,8 @@
 #include <avr/pgmspace.h>
 
 // pini
-#define PIN_R   PD5     // led rosu
-#define PIN_G   PD6     // led verde
+#define PIN_R   PD6     // led rosu
+#define PIN_G   PD5     // led verde
 #define BUZZER  PD1     // buzzer pasiv
 #define BUTTON  PD2     // buton
 
@@ -25,11 +28,11 @@
 // praguri senzor
 #define VAL_MIN_VALID    200
 #define VAL_MAX_VALID    950
-#define PRAG_DEGET_SUS   650   // peste asta = deget pus
-#define PRAG_DEGET_JOS   580   // sub asta = deget luat
+#define PRAG_DEGET_SUS   620 // peste asta = deget pus
+#define PRAG_DEGET_JOS   540  // sub asta = deget luat
 
-#define FINGER_LOST_MS   1200  // timp fara deget pana revenim la OFF
-#define CALIB_MS         2000  // durata calibrarii
+#define FINGER_LOST_MS   6000  // timp fara deget pana revenim la OFF
+#define CALIB_MS         5000  // durata calibrarii
 
 // limitele BPM aleator
 #define BPM_MIN          50
@@ -70,14 +73,11 @@ uint32_t millis(void) {
     return v;
 }
 
-// led + buzzer
-void red_on(void)    { PORTD |=  (1 << PIN_R); }
-void red_off(void)   { PORTD &= ~(1 << PIN_R); }
+// led - logica normala cu tranzistor NPN
 void green_on(void)  { PORTD |=  (1 << PIN_G); }
 void green_off(void) { PORTD &= ~(1 << PIN_G); }
 
 void all_off(void) {
-    red_off();
     green_off();
     PORTD &= ~(1 << BUZZER);
 }
@@ -354,6 +354,41 @@ void setup_pins(void) {
     all_off();
 }
 
+// canta o nota la o frecventa data (Hz) pentru o durata (ms)
+void buzzer_note(uint16_t freq, uint16_t ms) {
+    if (freq == 0) { _delay_ms(1); return; }
+    uint16_t half_period = 500000UL / freq;
+    uint32_t cycles = (uint32_t)freq * ms / 1000;
+    for (uint32_t i = 0; i < cycles; i++) {
+        PORTD |=  (1 << BUZZER);
+        for (uint16_t j = 0; j < half_period; j++) _delay_us(1);
+        PORTD &= ~(1 << BUZZER);
+        for (uint16_t j = 0; j < half_period; j++) _delay_us(1);
+    }
+}
+
+// cantec vesel la OK
+void melodie_ok(void) {
+    buzzer_note(523, 150);   // Do
+    _delay_ms(30);
+    buzzer_note(659, 150);   // Mi
+    _delay_ms(30);
+    buzzer_note(784, 150);   // Sol
+    _delay_ms(30);
+    buzzer_note(1047, 300);  // Do sus (lung)
+}
+
+// cantec trist la ANORMAL
+void melodie_anormal(void) {
+    buzzer_note(440, 300);   // La
+    _delay_ms(50);
+    buzzer_note(392, 300);   // Sol
+    _delay_ms(50);
+    buzzer_note(349, 300);   // Fa
+    _delay_ms(50);
+    buzzer_note(330, 500);   // Mi (lung, coboara)
+}
+
 // converteste BPM in interval intre batai (ms)
 uint16_t bpm_to_interval(uint8_t bpm) {
     if (bpm == 0) bpm = 1;
@@ -382,6 +417,7 @@ int main(void) {
     oled_init();
     timer0_init();
     sei();
+    UCSR0B = 0; // ca sa nu interfereze cu Timer0 (RX/TX dezactivate)
 
     display_off();
 
@@ -418,6 +454,7 @@ int main(void) {
         // CALIB
         if (state == STATE_CALIB) {
             display_calib();
+            UCSR0B = 0;
 
             // citim senzorul fara deget cateva secunde (pas vizual)
             uint32_t t0 = millis();
@@ -471,10 +508,13 @@ int main(void) {
                 if (!fingerOn && v >= PRAG_DEGET_SUS) fingerOn = true;
                 if (fingerOn  && v <  PRAG_DEGET_JOS) fingerOn = false;
             }
+            if (v == 0xFFFF) fingerLostAt = 0;
             // daca v == 0xFFFF (glitch total) pastram starea anterioara
 
-            // deget luat - dupa un timp revenim la OFF
-            if (!fingerOn) {
+            // primele 2 secunde nu verificam degetul (stabilizare)
+            if (now - sessionStart < CALIB_MS) {
+                fingerLostAt = 0;
+            } else if (!fingerOn) {
                 if (fingerLostAt == 0) {
                     fingerLostAt = now;
                 } else if (now - fingerLostAt >= FINGER_LOST_MS) {
@@ -487,17 +527,17 @@ int main(void) {
                 fingerLostAt = 0;
             }
 
+            
             // inima bate doar cat timp degetul e prezent
             if (fingerOn) {
                 if (now - lastBeatMs >= interval) {
                     lastBeatMs = now;
                     beats++;
 
-                    // ledul rosu pulseaza sincron cu buzzer-ul
+                    // ledul verde pulseaza sincron cu buzzer-ul
+                    green_on();
+                    beat_effect();
                     green_off();
-                    red_on();                   // led rosu aprins
-                    beat_effect();              // lub-dub
-                    red_off();                  // se stinge dupa bataie
 
                     // actualizam display-ul
                     uint32_t e = now - sessionStart;
@@ -508,7 +548,6 @@ int main(void) {
                 }
             } else {
                 // fara deget: leduri stinse
-                red_off();
                 green_off();
             }
 
@@ -527,14 +566,16 @@ int main(void) {
                 all_off();
 
                 // verdict dupa BPM-ul sesiunii: 60..100 = OK
-                bool ok = (bpm_ales >= BPM_NORMAL_JOS &&
-                           bpm_ales <= BPM_NORMAL_SUS);
+                bool ok = (beats >= BPM_NORMAL_JOS &&
+                           beats <= BPM_NORMAL_SUS);
+                           
                 if (ok) {
                     green_on();
+                    melodie_ok();
                 } else {
-                    red_on();
+                    melodie_anormal();
                 }
-                display_result(bpm_ales, ok);
+                display_result(beats, ok);
 
                 // ramanem pe ecranul de rezultat
                 state = STATE_OFF;
